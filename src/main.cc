@@ -2,11 +2,10 @@
 #include <ctgmath>
 #include <random>
 #include <chrono>
-#include <Eigen/Dense>
 
 #include "davidson.h"
 
-#define DIM 4000
+#define DIM 10000
 #define NSTATE 2
 
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
@@ -17,24 +16,24 @@ int main()
 // generate Hamiltonian-like random Hermiatian matrix
 	std::random_device rd; 
     std::mt19937 gen(rd()); 
-    std::uniform_real_distribution<> nondiag(1E-3, 1E-1);
+    std::uniform_real_distribution<> nondiag(-7, -4);
  
 	Matrix A(DIM, DIM);
 	
 	for(size_t i = 0; i < DIM; ++i){
 		A(i,i) = static_cast<double>(i + 1);
 		for(size_t j = i + 1; j < DIM; ++j){
-			A(i,j) = A(j,i) = nondiag(gen);
+			A(i,j) = A(j,i) = pow(10, nondiag(gen));
 		}
 	}
 
 // reference diagonalization	
 	auto start = std::chrono::high_resolution_clock::now();
 
-	Eigen::SelfAdjointEigenSolver<Matrix> eigensolver(A);
+//	Eigen::SelfAdjointEigenSolver<Matrix> eigensolver(A);
 	
-	auto ref_eval = eigensolver.eigenvalues();
-	auto ref_evec = eigensolver.eigenvectors();
+//	auto ref_eval = eigensolver.eigenvalues();
+//	auto ref_evec = eigensolver.eigenvectors();
 
 	auto stop = std::chrono::high_resolution_clock::now();
 	std::cout << "full_diag time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
@@ -52,14 +51,15 @@ int main()
 
 	stop = std::chrono::high_resolution_clock::now();
 	std::cout << "davidson time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
-	
+
+/*	
 	std::cout << "reference\t" << "davidson\t" << "diff" << std::endl;
 	for(size_t i = 0; i < NSTATE; ++i){
 		std::cout.precision(10);
 		std::cout << ref_eval[i] << '\t' << eval[i] << '\t' 
 			<< ref_eval[i] - eval[i] << std::endl;
 	}
-/*	
+	
 	for(size_t i = 0; i < NSTATE; ++i){
 		for(size_t j = 0; j < DIM; j++){
 		std::cout.precision(10);
@@ -67,8 +67,8 @@ int main()
 			<< ref_evec.col(i)[j] - evec.col(i)[j] << std::endl;
 	}
 	getchar();
-	}
-	*/ 	
+	}*/
+		
 }
 
 
