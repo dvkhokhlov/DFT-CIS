@@ -1,18 +1,13 @@
-//#include "qm_residue.h"
-
-// multi-root Davidson
-
-#include <fstream>
 #include <iostream>
-#include <stdexcept>
 #include <ctgmath>
 #include <random>
-#include <cassert>
-#include <tuple>
-
+#include <chrono>
 #include <Eigen/Dense>
 
-#define DIM 200
+#include "davidson.h"
+
+#define DIM 4000
+#define NSTATE 2
 
 typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
         Matrix;
@@ -22,118 +17,60 @@ int main()
 // generate Hamiltonian-like random Hermiatian matrix
 	std::random_device rd; 
     std::mt19937 gen(rd()); 
-    std::uniform_real_distribution<> nondiag(1E-2, 5E-1);
+    std::uniform_real_distribution<> nondiag(1E-3, 1E-1);
  
 	Matrix A(DIM, DIM);
 	
 	for(size_t i = 0; i < DIM; ++i){
-		A(i,i) = static_cast<double>(i);
+		A(i,i) = static_cast<double>(i + 1);
 		for(size_t j = i + 1; j < DIM; ++j){
 			A(i,j) = A(j,i) = nondiag(gen);
 		}
 	}
 
 // reference diagonalization	
+	auto start = std::chrono::high_resolution_clock::now();
+
 	Eigen::SelfAdjointEigenSolver<Matrix> eigensolver(A);
 	
 	auto ref_eval = eigensolver.eigenvalues();
 	auto ref_evec = eigensolver.eigenvectors();
-		
+
+	auto stop = std::chrono::high_resolution_clock::now();
+	std::cout << "full_diag time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
+
 // multi-root Davidson diagonalizer
 	
-	const double tol = 1E-6;
+	davidson dvs_solver(A, NSTATE);
 	
-	size_t neigenpair = 2;
-	size_t maxiter = 1000;
-	double residual;
+	start = std::chrono::high_resolution_clock::now();
 	
-	size_t k = 1;
-	Matrix V(DIM, neigenpair);
-	Matrix W(DIM, neigenpair);
-	Matrix H(neigenpair, neigenpair);
-	std::vector<Eigen::VectorXd> x(neigenpair);
-	std::vector<Eigen::VectorXd> r(neigenpair);
-	std::vector<Eigen::VectorXd> t(neigenpair);
+	dvs_solver.solve();
 	
-	bool converged = false;
-	//initial guess
-	for(size_t i = 0; i < neigenpair; ++i)
-		V(i, i) = 1.;
-	
-	do{
-		// compute Wk = A*V
-		W = A*V;
-		// compute Rayleigh matrix H = Vt*W
-		H = V.transpose()*W;
-//		std::cout << H << std::endl;
+	auto evec = dvs_solver.eigenvectors();
+	auto eval = dvs_solver.eigenvalues();
 
-		// diagonalize 
-		Eigen::SelfAdjointEigenSolver<Matrix> R_eigensolver(H);
-		auto y = R_eigensolver.eigenvectors();
-		auto lambda = R_eigensolver.eigenvalues();
-//		std::cout << R_eigensolver.eigenvalues() << std::endl;
-//		std::cout << R_eigensolver.eigenvectors() << std::endl;
-
-		// compute Ritz vectors
-		for(size_t i = 0; i < neigenpair; ++i){
-			x[i] = V*y.col(i);
-		}
-		// compute residuals
-		converged = true;
-		for(size_t i = 0; i < neigenpair; ++i){
-			r[i] = lambda[i]*x[i] - W*y.col(i);
-			
-			auto residue = r[i].norm();
-			if(residue > tol) converged = false;
-			 
-			std::cout << "state " << i << "; residue = " << residue << std::endl;
-		}
-		
-		if(k==100){
-//		if(converged){
-			std::cout << "Davidson converged" << std::endl;
-			
-			for(size_t i = 0; i < neigenpair; ++i){
-				std::cout.precision(5);
-				std::cout << "Davidson L = " << lambda[i] << "; reference L = " << ref_eval[i] << std::endl;
-				getchar();
-				for(size_t j = 0; j < DIM; ++j){
-					std::cout << y(i,j) << "  " << ref_evec(i,j) << std::endl;
-				}
-				getchar();
-			}
-			
-//			std::cout << y.col(i) << std::endl;		
-			break;
-		}
-		
-		// compute new directions
-		for(size_t i = 0; i < neigenpair; ++i){
-			t[i] = r[i]/(lambda[i] - A(i,i));
-		}
-		
-		//std::cout << r << std::endl;
-		k++;
-		
-		V.conservativeResize(DIM, k*neigenpair);
-		for(size_t i = 0; i < neigenpair; ++i){
-			V.col((k-1)*neigenpair + i) = t[i];
-		}
-		Eigen::HouseholderQR<Matrix> qr(V);
-		V = qr.householderQ(); 
-		
-		
-		x.resize(k*neigenpair);
-		r.resize(k*neigenpair);
-		t.resize(k*neigenpair);
-		
-					
-	}while(k < maxiter);
+	stop = std::chrono::high_resolution_clock::now();
+	std::cout << "davidson time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 	
-
-	
-
+	std::cout << "reference\t" << "davidson\t" << "diff" << std::endl;
+	for(size_t i = 0; i < NSTATE; ++i){
+		std::cout.precision(10);
+		std::cout << ref_eval[i] << '\t' << eval[i] << '\t' 
+			<< ref_eval[i] - eval[i] << std::endl;
+	}
+/*	
+	for(size_t i = 0; i < NSTATE; ++i){
+		for(size_t j = 0; j < DIM; j++){
+		std::cout.precision(10);
+		std::cout << ref_evec.col(i)[j] << ' ' << evec.col(i)[j] << ' ' 
+			<< ref_evec.col(i)[j] - evec.col(i)[j] << std::endl;
+	}
+	getchar();
+	}
+	*/ 	
 }
+
 
 
 /*
