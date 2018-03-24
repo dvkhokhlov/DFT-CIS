@@ -11,7 +11,7 @@ QM_residue::QM_residue(const std::string& _qm_fname) : qm_fname(_qm_fname)
 		read_pars();
 		read_atoms();
 		read_basis();
-		read_ecxprp();
+		read_MOs();
 	}
 	catch (const std::exception &e){
 		std::cerr << e.what() << std::endl;
@@ -64,7 +64,8 @@ void QM_residue::read_pars ()
 	}
 }
 
-void QM_residue::read_atoms(){
+void QM_residue::read_atoms()
+{
 	if(qm_file && parsQ){
 		const size_t GMS_CHRG_STRIDE = 11;
 		const size_t GMS_CHRG_WIDTH = 3;
@@ -109,7 +110,8 @@ void QM_residue::read_atoms(){
 	
 }
 
-void QM_residue::read_shell (const std::streampos& p_beg, const std::streampos& p_end, size_t n){
+void QM_residue::read_shell (const std::streampos& p_beg, const std::streampos& p_end, size_t n)
+{
 	const size_t GMS_EXP_STRIDE = 24;
 	const size_t GMS_EXP_WIDTH = 17;
 	const size_t GMS_CONTR0_STRIDE = 44;
@@ -207,13 +209,8 @@ void QM_residue::read_basis ()
 				natom_found++;
 				continue;
 			}
-			
-			if(!isspace(tmp.at(GMS_SHELLNUM_POS)) && !shellQ){
-				shellQ = true;
-				p_beg = p;
-			} 
-			
-			if(!tmp.compare(0, 33, " TOTAL NUMBER OF BASIS SET SHELLS")){
+
+			if(!tmp.compare(0, 4, "#end")){
 				if(natom_found == natom - 1){
 					break;
 				}
@@ -221,6 +218,11 @@ void QM_residue::read_basis ()
 					throw std::runtime_error ("QM_residue.read_basis(): end of basis reached before the end of atoms\n");
 				}
 			}
+						
+			if(!isspace(tmp.at(GMS_SHELLNUM_POS)) && !shellQ){
+				shellQ = true;
+				p_beg = p;
+			} 
 		}
 		
 	}	
@@ -240,11 +242,9 @@ void QM_residue::read_basis ()
 
 }
 
-void QM_residue::resort_dm ()
+void QM_residue::resort_MOs ()
 {
-	size_t norb1{0}, norb2{0};
-
-	// lambda resorting from GAMESS order (XX, YY, ZZ, ..) into libint one
+	// resort from GAMESS order (XX, YY, ZZ, ..) into libint one
 	auto map = [](size_t am, size_t ndx) -> size_t {
 		const static size_t d_map[]{0, 3, 4, 1, 5, 2};
 		const static size_t f_map[]{0, 3, 4, 5, 9, 7, 1, 6, 8, 2};
@@ -253,11 +253,11 @@ void QM_residue::resort_dm ()
 			case 1: return ndx;
 			case 2: return d_map[ndx];
 			case 3: return f_map[ndx];
-			default: throw std::runtime_error ("QM_residue.resort_dm(): unsupported angular moment\n");
+			default: throw std::runtime_error ("QM_residue.resort_MOs(): unsupported angular moment\n");
 		}
 	};
-
-	// lambda embedding normalization coefficients for non-axial primitives
+	
+	// embed normalization coefficients for non-axial primitives
 	auto scale = [](size_t am, size_t i) -> double {
 		switch(am){
 			case 0: return 1.;
@@ -278,104 +278,87 @@ void QM_residue::resort_dm ()
 				if (i == 7) return pow(5., 0.5);
 				if (i == 8) return pow(5., 0.5);
 				return pow(15., 0.5);
-			default: throw std::runtime_error ("QM_residue.resort_dm(): unsupported angular moment\n");
+			default: throw std::runtime_error ("QM_residue.resort_MOs(): unsupported angular moment\n");
 		}
 	};
 			
-	// resort and scale density matrix
-	for(size_t i = 0; i < nshell; i++){
-		norb2 = 0;
+	auto shell2bf = libint2::BasisSet::compute_shell2bf(basis);
+	// resort molecular orbitals
+	for(size_t i = 0; i < nmo; i++){
 		for(size_t j = 0; j < nshell; j++){
-			auto am1 = basis[i].contr[0].l;
-			auto am2 = basis[j].contr[0].l;
+			auto am = basis[j].contr[0].l;
 
-			size_t ngss1 = ((am1 + 1)*(am1 + 2))/2;
-			size_t ngss2 = ((am2 + 1)*(am2 + 2))/2;
-
-			for(size_t k = 0; k < ngss1; k++){
-				for(size_t l = 0; l < ngss2; l++){
-					dm01(norb1 + k, norb2 + l) *= pow(2., -0.5);
-				}
-			}			
+			size_t ngss = basis[j].size();
 			
-			if(am1 > 1 || am2 > 1){
-				double tmp[ngss1][ngss2];
+			if(am > 1 ){
+				double tmp[ngss];
 				
-				for(size_t k = 0; k < ngss1; k++){
-					for(size_t l = 0; l < ngss2; l++){
-						tmp[k][l] = dm01(norb1 + k, norb2 + l);
-					}
+				for(size_t k = 0; k < ngss; k++){
+						tmp[k] = MOcoef(i, shell2bf[j] + k);
 				}
 				
-				for(size_t k = 0; k < ngss1; k++){
-					for(size_t l = 0; l < ngss2; l++){
-						dm01(norb1 + k, norb2 + l) = tmp[map(am1, k)][map(am2, l)]*scale(am1, k)*scale(am2, l);
-					}
+				for(size_t k = 0; k < ngss; k++){
+						MOcoef(i, shell2bf[j] + k) = tmp[map(am, k)]*scale(am, k);
 				}
 			}
-	
-			norb2 += basis[j].size();
 		}
-		norb1 += basis[i].size();
 	}
 	
 }
 
-void QM_residue::read_ecxprp ()
+void QM_residue::read_MOs ()
 {
-	const size_t GMS_DM_STRIDE = 19;
-	const size_t GMS_DM_WIDTH = 17;
-	const size_t GMS_NCOL_DM = 5;
+	const size_t GMS_NCOL_MO = 5;
+	const size_t GMS_MO_STRIDE = 5;
+	const size_t GMS_MO_WIDTH = 15;
 	
 	if(qm_file && parsQ){
-		
 		qm_file.seekg(0, qm_file.beg);
-		
-		dm01.resize(ncgto, ncgto);
-		
-		bool dmQ = false;
+			
+		bool vecfound = false;
 		while(std::getline(qm_file, tmp)){
-			if(!tmp.compare(0, 58, " STATE1=                    0 STATE2=                    1")){
-				dmQ = true;
+			if(!tmp.compare(0, 4, "#vec")){
+				vecfound = true;
 				break;
 			}
 		}
+		if(!vecfound) throw std::runtime_error ("QM_residue.read_MOs(): #vec group not found\n");
 		
-		if(!dmQ) throw std::runtime_error ("QM_residue.read_ecxprp(): DM01 not found");
-		
-		size_t nblk = ncgto/GMS_NCOL_DM;
-		for(size_t i = 0; i < nblk; i++){
-			
-			for(size_t j = 0; j < 3; j++) std::getline(qm_file, tmp);
-			
-			for(size_t j = 0; j < ncgto; j++){
+// !!! assuption NMO = NAO			
+		nmo = ncgto;
+		MOcoef.resize(nmo, nmo);
+		for(size_t i = 0; i < nmo; ++i){
+			for(size_t j = 0; j < nmo/GMS_NCOL_MO; ++j){
+				
 				std::getline(qm_file, tmp);
+				if(!tmp.compare("#end")) throw std::runtime_error ("QM_residue.read_MOs(): #end reached before the end of MOs");
 				
-				for(size_t k = 0; k < GMS_NCOL_DM; k++){
-					auto dm = std::stod(tmp.substr(GMS_DM_STRIDE + k*GMS_DM_WIDTH, GMS_DM_WIDTH));
-					dm01(j, GMS_NCOL_DM*i + k) = dm;
+				for(size_t k = 0; k < GMS_NCOL_MO; ++k){
+					MOcoef(i, j*GMS_NCOL_MO + k) 
+						= std::stod(tmp.substr(GMS_MO_STRIDE + k*GMS_MO_WIDTH, GMS_MO_WIDTH));
 				}
+			}
+			if(nmo%GMS_NCOL_MO){
+				std::getline(qm_file, tmp);
+				if(!tmp.compare("#end")) throw std::runtime_error ("QM_residue.read_MOs(): #end reached before the end of MOs");
 				
+				for(size_t k = 0; k < nmo%GMS_NCOL_MO; ++k){
+					MOcoef(i, (nmo/GMS_NCOL_MO)*GMS_NCOL_MO + k) 
+						= std::stod(tmp.substr(GMS_MO_STRIDE + k*GMS_MO_WIDTH, GMS_MO_WIDTH));
+				}				
 			}
 		}
 		
-		for(size_t i = 0; i < 3; i++) std::getline(qm_file, tmp);
-		
-		for(size_t i = 0; i < ncgto; i++){
-			std::getline(qm_file, tmp);
-				
-			for(size_t k = 0; k < ncgto%GMS_NCOL_DM; k++){
-				dm01(i, GMS_NCOL_DM*nblk + k) = std::stod(tmp.substr(GMS_DM_STRIDE + k*GMS_DM_WIDTH, GMS_DM_WIDTH));
-			}
-		}
-		
-		resort_dm ();	
-	
 	}
 	else{
-		if(!qm_file) throw std::runtime_error ("QM_residue.read_ecxprp(): QM file stream closed");
-		if(!parsQ) throw std::runtime_error ("QM_residue.read_ecxprp(): read parameters before");
+		if(!qm_file) throw std::runtime_error ("QM_residue.read_mos(): QM file stream closed");
+		if(!parsQ) throw std::runtime_error ("QM_residue.read_mos(): read parameters before");
 	}
-
+		
+	resort_MOs();
+/*	
+	// eigenvectors of MOs are now stored in columns
+	// as in Eigen
+	MOcoef.transpose();
+	*/
 }
-

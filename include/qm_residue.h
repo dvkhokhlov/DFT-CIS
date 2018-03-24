@@ -12,17 +12,17 @@
 #include <limits>
 #include <ctgmath>
 
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        Matrix; 
-
 class QM_residue
 {
+	using Matrix = 
+		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>; 
+	
 	public:
 	// constructors
 	QM_residue() = delete;
 	QM_residue(const std::string& _qm_fname);
 	
-	~QM_residue() = default;
+	~QM_residue(){};
 	
 	inline std::vector<libint2::Shell>& get_basis()
 	{
@@ -34,36 +34,30 @@ class QM_residue
 		return basis;
 	}
 	
-	inline Matrix& get_dm()
+	inline Matrix& get_MOs()
 	{
-		return dm01;
+		return MOcoef;
 	}
 	
-	const inline Matrix& get_dm () const
+	const inline Matrix& get_MOs() const
 	{
-		return dm01;
-	}	
-	
-	friend void qd_calc (QM_residue&);
-//	friend double v_calc1 (QM_residue&);
-//	friend double v_calc2 (QM_residue&);
+		return MOcoef;
+	}
 	
 	size_t ncgto;
+	size_t natom;
+	size_t nshell;
+	size_t nmo;
 	
 	private:
 	// add reading mode!
 	bool pure = false;
-	
-	size_t natom;
-	size_t nshell;
-	
 	std::string qm_fname;
 		
 	std::vector<libint2::Shell> basis;
 	std::vector<libint2::Atom> atoms;
+	Matrix MOcoef;
 	
-	Matrix dm01;
-
 // auxiliary functions/variables
 	bool parsQ = false;
 	std::string tmp;
@@ -72,8 +66,8 @@ class QM_residue
 	void read_pars ();
 	void read_atoms();
 	void read_basis ();
-	void read_ecxprp ();
-	void resort_dm ();
+	void read_MOs ();
+	void resort_MOs();
 };
 
 #endif
