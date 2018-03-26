@@ -4,70 +4,16 @@
 #include <random>
 #include <chrono>
 
-#include "libint2.hpp"
-
+#include "integrals.h"
 #include "davidson.h"
 #include "qm_residue.h"
-
-
-
-namespace pars{
-	const double orto_cutoff = 2E-7;
-};
 
 using Matrix = 
 	Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>; 
 
-size_t nbasis(const std::vector<libint2::Shell>& shells) {
-  size_t n = 0;
-  for (const auto& shell: shells)
-    n += shell.size();
-  return n;
-}
-
-Matrix calc_overlap (const std::vector<libint2::Shell>& obs)
-{
-	using namespace libint2;
-	
-	initialize();
-
-	size_t max_nprim = BasisSet::max_nprim(obs);
-	size_t max_l = BasisSet::max_l(obs);
-	auto shell2bf = BasisSet::compute_shell2bf(obs);
-	
-	Engine s_engine(Operator::overlap, max_nprim, max_l);
-	const auto& buf_vec = s_engine.results();
-	
-	Matrix S(nbasis(obs), nbasis(obs));
-	
-	for(size_t i = 0, i_max = obs.size(); i < i_max; ++i){
-		for(size_t j = 0, j_max = obs.size(); j < j_max; ++j){
-			
-			s_engine.compute(obs[i], obs[j]);
-			
-			auto ints_set = buf_vec[0];
-			//if(!ints_set) continue;
-			
-			auto nf1 = obs[i].size();
-			auto nf2 = obs[j].size();
-			auto bf1 = shell2bf[i];
-			auto bf2 = shell2bf[j];
-			
-			for(size_t k = 0; k < nf1; k++){
-				for(size_t l = 0; l < nf2; l++){
-					S(bf1 + k, bf2 + l) = ints_set[k*nf2 + l];
-				}
-			}
-			
-//      Eigen::Map<const Matrix> buf_mat(buf_vec[0], nf1, nf2);
- //     S.block(bf1, bf2, nf1, nf2) = buf_mat;
-		}
-	}
-
-	finalize();
-	
-	return std::move(S);
-}
+namespace pars{
+	const double orto_cutoff = 2E-7;
+};
 
 int main(int argc, char *argv[])
 {
@@ -75,13 +21,16 @@ int main(int argc, char *argv[])
 	for(size_t i = 0; i < static_cast<size_t>(argc); ++i){
         if(std::string{argv[i]} == "-inp"){inpfile = std::string{argv[i+1]};}
     }
-/*
+
 	QM_residue mol(inpfile);
 	
 	Matrix& MOcoef = mol.get_MOs();
 	
 // check orthonormality of MOs 	
-	Matrix S = calc_overlap(mol.get_basis());
+	Matrix S = calc_1body_ints(libint2::Operator::overlap, mol.get_basis());
+	
+	
+	
 	for(size_t i = 0; i < mol.nmo; ++i){
 		Eigen::VectorXd MOi = MOcoef.row(i);
 		Eigen::VectorXd SMOi = S*MOi;
@@ -91,7 +40,7 @@ int main(int argc, char *argv[])
 			std::cout << "warning: normalization of MO" << i << " = " << norm << std::endl;
 		}
 	}	
-	*/
+	
 
 		
 }

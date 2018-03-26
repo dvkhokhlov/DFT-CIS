@@ -33,6 +33,16 @@ class QM_residue
 	{
 		return basis;
 	}
+
+	inline std::vector<libint2::Atom>& get_atoms()
+	{
+		return atoms;
+	}
+	
+	const inline std::vector<libint2::Atom>& get_atoms() const
+	{
+		return atoms;
+	}
 	
 	inline Matrix& get_MOs()
 	{
