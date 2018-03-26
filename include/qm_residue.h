@@ -1,6 +1,7 @@
 #ifndef QM_RESIDUE_H_INCLUDED
 #define QM_RESIDUE_H_INCLUDED
 
+#include "aliases.h"
 #include "libint2.hpp"
 
 #include <fstream>
@@ -14,9 +15,6 @@
 
 class QM_residue
 {
-	using Matrix = 
-		Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>; 
-	
 	public:
 	// constructors
 	QM_residue() = delete;
@@ -54,12 +52,25 @@ class QM_residue
 		return MOcoef;
 	}
 	
+	inline size_t nelec()
+	{
+		size_t nelec = 0;
+		for(const auto& atom : atoms)
+			nelec += atom.atomic_number;
+			
+		nelec -= charge;
+		
+		return nelec;
+	}
+	
 	size_t ncgto;
 	size_t natom;
 	size_t nshell;
 	size_t nmo;
 	
 	private:
+	// !!! assumpiton of non-charged molecule
+	int charge = 0;
 	// add reading mode!
 	bool pure = false;
 	std::string qm_fname;
