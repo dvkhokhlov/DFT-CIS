@@ -97,8 +97,6 @@ int main(int argc, char *argv[])
 	for(size_t i = 0, i_max = mol.get_atoms().size(); i < i_max; ++i){
 		ncore += ncore_atomic(mol.get_atoms()[i].atomic_number);
 	}
-// !!!!
-//	ncore = 0;
 
 // create SAPS
 	auto nao = mol.ncgto;
@@ -134,11 +132,22 @@ int main(int argc, char *argv[])
 /*
  *  Davidson procedure	
  */
-	
-	size_t nstate = 2;
-	size_t ntrial = nstate*david_pars::ntrial_per_state;
+
+	size_t nstate = 6;
+	size_t ntrial = nstate*david_pars::ntrial_per_state; //12;
 	size_t model_dim = ntrial;
 	size_t nvec_used = ntrial;
+	
+// eigenvectors and eigenvalues
+	Matrix cis_evec(nsaps, nstate);
+	Vector cis_eval(nstate);
+	 
+// estimated Hcis(i,i) for preconditioner
+	Vector Hdiag(nsaps);
+	for(size_t k = 0; k < nsaps; ++k)
+		Hdiag(k) = orbital_e[saps[k].second] - orbital_e[saps[k].first];
+	
+	size_t niter = 0;
 	
 // initial guess	
 	Matrix V_trial = Matrix::Zero(nsaps, ntrial);
@@ -160,6 +169,8 @@ int main(int argc, char *argv[])
 		return std::move(Tcis);
 	};
 	
+	do{
+	
 	std::vector<Matrix> Tcis(ntrial);
 	for(size_t tr = 0; tr < ntrial; ++tr)
 		Tcis[tr] = compute_Tcis(V_trial.col(tr));
@@ -168,9 +179,10 @@ int main(int argc, char *argv[])
 //	std::cout << Tcis[0] << std::endl;
 	
 	start = std::chrono::high_resolution_clock::now();
+
 // Fock-like matrices; batched evaluation
 	auto Flike_batch = compute_2body_fock_like_batch_s(mol.get_basis(), Tcis);
-	
+
 	stop = std::chrono::high_resolution_clock::now();
 	std::cout << "Fock-like time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 
@@ -194,28 +206,108 @@ int main(int argc, char *argv[])
 		}
 		
 	}
-	
+
+// projection to model Hamiltonian
 	auto model_H = V_trial.transpose()*W_trial;
 	
-	std::cout << "Model CI-S Hamiltonian; ntrial = " << ntrial << "; nsaps = " << nsaps << std::endl;
-	std::cout << model_H << std::endl;
+//	std::cout << "Model CI-S Hamiltonian; ntrial = " << ntrial << "; nsaps = " << nsaps << std::endl;
+//	std::cout << model_H << std::endl;
 
-	
+// diagonalization
 	Eigen::SelfAdjointEigenSolver<Matrix> eigensolverH(model_H);
 	
-	std::cout << "Eigenvalues in a.u.:" << std::endl;	
-	std::cout << eigensolverH.eigenvalues() << std::endl;
+//	std::cout << "Eigenvalues in a.u.:" << std::endl;	
+//	std::cout << eigensolverH.eigenvalues() << std::endl;
 	
 	auto evec = eigensolverH.eigenvectors();
+	auto eval = eigensolverH.eigenvalues();
+
+// Ritz vectors	
+	Matrix x = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		x.col(tr) = V_trial*evec.col(tr);
+	
+// residual vectors
+	std::cout << "Residues:"  << std::endl;
+	Matrix res = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		res.col(tr) = eval[tr]*x.col(tr) - W_trial*evec.col(tr);
+//		std::cout << res.col(tr).norm() << std::endl;
+	}
+	
+// convergence check
+	std::cout << "Iteration " << niter << " :" << std::endl;
+	std::cout << std::setw(16) << "Energy" << std::setw(16) << "Residue" << std::endl;
+	bool converged = true;
+	for(size_t i = 0; i < nstate; ++i){
+		auto residue = res.col(i).norm();
+		std::cout << "state " << i + 1 << std::setw(16) << eval[i] << std::setw(16) << residue << std::endl;
+		if(residue > david_pars::tolerance) converged = false;
+	}
+	if(converged){
+		for(size_t i = 0; i < nstate; ++i){
+			cis_eval[i] = eval[i];
+			cis_evec.col(i) = x.col(i);
+		}
+		std::cout << "Davidson converged" << std::endl;
+		break;
+	}
+	
+// correction vectors
+	Matrix corr = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		for(size_t k = 0; k < nsaps; ++k){
+			corr(k, tr) = res(k, tr)/(eval[tr] - Hdiag[k]);
+		}
+	}
+//	std::cout << corr << std::endl;
+	
+	nvec_used += ntrial;
+	assert(nvec_used < nsaps && "number of used trial vectors exceeded number of SAPS");
+		
+	auto ntrial_add = nstate*david_pars::ntrial_per_state;
+	if(ntrial < nstate*david_pars::trial_space_mult - ntrial_add){
+		auto ntrial_old = ntrial;
+		ntrial += ntrial_add;
+		V_trial.conservativeResize(nsaps, ntrial);
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(ntrial_old + i) = corr.col(i);
+	}
+	else{
+		V_trial.resize(nsaps, 2*ntrial_add);
+		ntrial = 2*ntrial_add;
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(i) = x.col(i);
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(i + ntrial_add) = corr.col(i);
+	}
+		
+	auto QR = V_trial.fullPivHouseholderQr();
+	V_trial = QR.matrixQ().adjoint().topRows(V_trial.cols()).transpose(); 
+
+	++niter;
+	}while(niter < david_pars::max_davison_iter);
+	
+	
+	for(size_t i = 0; i < nstate; ++i){
+		std::cout << "State " << i + 1 << std::endl;
+		std::cout << "Energy = " << cis_eval[i] << std::endl;
+		for(size_t k = 0; k < nsaps; ++k){
+			if(fabs(cis_evec(k, i)) > 0.05){
+				std::cout << saps[k].first << " -> " << saps[k].second << ' ' << cis_evec(k, i) << std::endl;
+			}
+		}
+	}
+/*
 	std::cout << "Eigenvectors of model space" << std::endl;
 	for(size_t i = 0; i < ntrial; ++i){
 		std::cout << saps[i].first << " -> " << saps[i].second << ' ';
 		for(size_t j = 0; j < ntrial; ++j){
-			std::cout << std::setw(14) << evec(i, j);
+			std::cout << std::setw(16) << evec(i, j);
 		}
 		std::cout << std::endl;
 	}
-	
+*/	
 	
 	
 	

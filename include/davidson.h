@@ -18,8 +18,8 @@
 
 namespace david_pars{
 	const size_t max_davison_iter = 200;
-	const size_t ntrial_per_state = 4;
-	const size_t trial_space_mult = 8*ntrial_per_state;
+	const size_t ntrial_per_state = 2;
+	const size_t trial_space_mult = 4*ntrial_per_state;
 	const size_t ntrial_per_state0 = ntrial_per_state;
 	const double tolerance = 1E-5;
 }
