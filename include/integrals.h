@@ -14,6 +14,6 @@ Matrix compute_1body_ints (libint2::Operator op,
 Matrix compute_2body_fock(const std::vector<libint2::Shell>& shells,
                        const Matrix& D);
                        
-std::vector<Matrix> compute_2body_fock_like_batch(const std::vector<libint2::Shell>& shells,
-                          const std::vector<Matrix>& batch_P);
+std::vector<Matrix> compute_2body_fock_like_batch_s(const std::vector<libint2::Shell>& shells,
+                                 const std::vector<Matrix>& batch_P);
 #endif

@@ -49,15 +49,20 @@ int main(int argc, char *argv[])
 	auto MOcoef_occ = MOcoef.topRows(nocc);
     Matrix D = MOcoef_occ.transpose() * MOcoef_occ;
 
+	auto start = std::chrono::high_resolution_clock::now();
 // build Fock matrix and compute orbiat energies
 	Matrix T = compute_1body_ints(libint2::Operator::kinetic, mol.get_basis());
 	Matrix V = compute_1body_ints(libint2::Operator::nuclear, mol.get_basis(), mol.get_atoms());
 	
 	Matrix F = T + V + compute_2body_fock(mol.get_basis(), D);
+
+	auto stop = std::chrono::high_resolution_clock::now();
+	std::cout << "Fock time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
 	
 	Eigen::GeneralizedSelfAdjointEigenSolver<Matrix> eigensolver(F, S);
 	auto orbital_e = eigensolver.eigenvalues();
 	
+	std::cout << "orbital energies:" << std::endl;
 	for(size_t i = 0; i < mol.nmo; ++i){
 		std::cout << orbital_e[i] << std::endl;
 	}
@@ -92,6 +97,8 @@ int main(int argc, char *argv[])
 	for(size_t i = 0, i_max = mol.get_atoms().size(); i < i_max; ++i){
 		ncore += ncore_atomic(mol.get_atoms()[i].atomic_number);
 	}
+// !!!!
+//	ncore = 0;
 
 // create SAPS
 	auto nao = mol.ncgto;
@@ -117,18 +124,101 @@ int main(int argc, char *argv[])
 	
 	std::sort(saps.begin(), saps.end(), energy_sort);
 
-/*	
+	std::cout << "SAPS diagonal eneries" << std::endl;
 	for(const auto& sap : saps){
 		std::cout << sap.first << " -> " << sap.second << "; E = " 
 			<< orbital_e[sap.second] - orbital_e[sap.first] << std::endl;
 	}
-*/
-	size_t nstate = 2;
+
 
 /*
  *  Davidson procedure	
  */
+	
+	size_t nstate = 2;
+	size_t ntrial = nstate*david_pars::ntrial_per_state;
+	size_t model_dim = ntrial;
+	size_t nvec_used = ntrial;
+	
+// initial guess	
+	Matrix V_trial = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		V_trial(tr, tr) = 1.0;	
 
+// 	evaluation of CIS state density; in form of lambda
+	auto compute_Tcis = [&](const Matrix& V_st){
+		Matrix Tcis = Matrix::Zero(nao, nao);
+		
+		for(size_t i = 0; i < nao; ++i){
+			for(size_t j = 0; j < nao; ++j){
+				for(size_t k = 0; k < nsaps; ++k){
+					Tcis(i,j) += V_st(k)*MOcoef(saps[k].first, i)*MOcoef(saps[k].second, j);
+				}
+			}
+		}
+		
+		return std::move(Tcis);
+	};
+	
+	std::vector<Matrix> Tcis(ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		Tcis[tr] = compute_Tcis(V_trial.col(tr));
+
+//	std::cout << "CIS-S trial density for state 0:" << std::endl;
+//	std::cout << Tcis[0] << std::endl;
+	
+	start = std::chrono::high_resolution_clock::now();
+// Fock-like matrices; batched evaluation
+	auto Flike_batch = compute_2body_fock_like_batch_s(mol.get_basis(), Tcis);
+	
+	stop = std::chrono::high_resolution_clock::now();
+	std::cout << "Fock-like time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
+
+//	std::cout << "Fock-like build for trial vector 0:" << std::endl;
+//	std::cout << Flike_batch[0] << std::endl;
+		
+// W_trial = H*V_trial	
+	Matrix W_trial = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		
+		for(size_t k = 0; k < nsaps; ++k){
+			
+			for(size_t i = 0; i < nao; ++i){
+				for(size_t j = 0; j < nao; ++j){
+					W_trial(k, tr) += MOcoef(saps[k].first, i)*MOcoef(saps[k].second, j)*Flike_batch[tr](i, j);
+				}
+			}
+			
+			W_trial(k, tr) += (orbital_e[saps[k].second] - orbital_e[saps[k].first])*V_trial(k, tr);
+			
+		}
+		
+	}
+	
+	auto model_H = V_trial.transpose()*W_trial;
+	
+	std::cout << "Model CI-S Hamiltonian; ntrial = " << ntrial << "; nsaps = " << nsaps << std::endl;
+	std::cout << model_H << std::endl;
+
+	
+	Eigen::SelfAdjointEigenSolver<Matrix> eigensolverH(model_H);
+	
+	std::cout << "Eigenvalues in a.u.:" << std::endl;	
+	std::cout << eigensolverH.eigenvalues() << std::endl;
+	
+	auto evec = eigensolverH.eigenvectors();
+	std::cout << "Eigenvectors of model space" << std::endl;
+	for(size_t i = 0; i < ntrial; ++i){
+		std::cout << saps[i].first << " -> " << saps[i].second << ' ';
+		for(size_t j = 0; j < ntrial; ++j){
+			std::cout << std::setw(14) << evec(i, j);
+		}
+		std::cout << std::endl;
+	}
+	
+	
+	
+	
 	libint2::finalize();	
 
 }
