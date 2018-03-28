@@ -1,6 +1,7 @@
 #ifndef QM_RESIDUE_H_INCLUDED
 #define QM_RESIDUE_H_INCLUDED
 
+#include "aliases.h"
 #include "libint2.hpp"
 
 #include <fstream>
@@ -12,9 +13,6 @@
 #include <limits>
 #include <ctgmath>
 
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        Matrix; 
-
 class QM_residue
 {
 	public:
@@ -22,7 +20,7 @@ class QM_residue
 	QM_residue() = delete;
 	QM_residue(const std::string& _qm_fname);
 	
-	~QM_residue() = default;
+	~QM_residue(){};
 	
 	inline std::vector<libint2::Shell>& get_basis()
 	{
@@ -33,37 +31,54 @@ class QM_residue
 	{
 		return basis;
 	}
-	
-	inline Matrix& get_dm()
+
+	inline std::vector<libint2::Atom>& get_atoms()
 	{
-		return dm01;
+		return atoms;
 	}
 	
-	const inline Matrix& get_dm () const
+	const inline std::vector<libint2::Atom>& get_atoms() const
 	{
-		return dm01;
-	}	
+		return atoms;
+	}
 	
-	friend void qd_calc (QM_residue&);
-//	friend double v_calc1 (QM_residue&);
-//	friend double v_calc2 (QM_residue&);
+	inline Matrix& get_MOs()
+	{
+		return MOcoef;
+	}
+	
+	const inline Matrix& get_MOs() const
+	{
+		return MOcoef;
+	}
+	
+	inline size_t nelec()
+	{
+		size_t nelec = 0;
+		for(const auto& atom : atoms)
+			nelec += atom.atomic_number;
+			
+		nelec -= charge;
+		
+		return nelec;
+	}
 	
 	size_t ncgto;
-	
-	private:
-	// add reading mode!
-	bool pure = false;
-	
 	size_t natom;
 	size_t nshell;
+	size_t nmo;
 	
+	private:
+	// !!! assumpiton of non-charged molecule
+	int charge = 0;
+	// add reading mode!
+	bool pure = false;
 	std::string qm_fname;
 		
 	std::vector<libint2::Shell> basis;
 	std::vector<libint2::Atom> atoms;
+	Matrix MOcoef;
 	
-	Matrix dm01;
-
 // auxiliary functions/variables
 	bool parsQ = false;
 	std::string tmp;
@@ -72,8 +87,8 @@ class QM_residue
 	void read_pars ();
 	void read_atoms();
 	void read_basis ();
-	void read_ecxprp ();
-	void resort_dm ();
+	void read_MOs ();
+	void resort_MOs();
 };
 
 #endif

@@ -1,320 +1,318 @@
-//#include "qm_residue.h"
-
-// multi-root Davidson
-
-#include <fstream>
 #include <iostream>
-#include <stdexcept>
+#include <iomanip>
 #include <ctgmath>
 #include <random>
-#include <cassert>
-#include <tuple>
+#include <chrono>
+#include <algorithm>
+#include <utility>
 
-#include <Eigen/Dense>
+#include "integrals.h"
+#include "davidson.h"
+#include "qm_residue.h"
 
-#define DIM 200
+namespace pars{
+	const double orto_cutoff = 2E-7;
+};
 
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        Matrix;
-        
-int main()
+int main(int argc, char *argv[])
 {
-// generate Hamiltonian-like random Hermiatian matrix
-	std::random_device rd; 
-    std::mt19937 gen(rd()); 
-    std::uniform_real_distribution<> nondiag(1E-2, 5E-1);
- 
-	Matrix A(DIM, DIM);
-	
-	for(size_t i = 0; i < DIM; ++i){
-		A(i,i) = static_cast<double>(i);
-		for(size_t j = i + 1; j < DIM; ++j){
-			A(i,j) = A(j,i) = nondiag(gen);
-		}
-	}
 
-// reference diagonalization	
-	Eigen::SelfAdjointEigenSolver<Matrix> eigensolver(A);
-	
-	auto ref_eval = eigensolver.eigenvalues();
-	auto ref_evec = eigensolver.eigenvectors();
-		
-// multi-root Davidson diagonalizer
-	
-	const double tol = 1E-6;
-	
-	size_t neigenpair = 2;
-	size_t maxiter = 1000;
-	double residual;
-	
-	size_t k = 1;
-	Matrix V(DIM, neigenpair);
-	Matrix W(DIM, neigenpair);
-	Matrix H(neigenpair, neigenpair);
-	std::vector<Eigen::VectorXd> x(neigenpair);
-	std::vector<Eigen::VectorXd> r(neigenpair);
-	std::vector<Eigen::VectorXd> t(neigenpair);
-	
-	bool converged = false;
-	//initial guess
-	for(size_t i = 0; i < neigenpair; ++i)
-		V(i, i) = 1.;
-	
-	do{
-		// compute Wk = A*V
-		W = A*V;
-		// compute Rayleigh matrix H = Vt*W
-		H = V.transpose()*W;
-//		std::cout << H << std::endl;
-
-		// diagonalize 
-		Eigen::SelfAdjointEigenSolver<Matrix> R_eigensolver(H);
-		auto y = R_eigensolver.eigenvectors();
-		auto lambda = R_eigensolver.eigenvalues();
-//		std::cout << R_eigensolver.eigenvalues() << std::endl;
-//		std::cout << R_eigensolver.eigenvectors() << std::endl;
-
-		// compute Ritz vectors
-		for(size_t i = 0; i < neigenpair; ++i){
-			x[i] = V*y.col(i);
-		}
-		// compute residuals
-		converged = true;
-		for(size_t i = 0; i < neigenpair; ++i){
-			r[i] = lambda[i]*x[i] - W*y.col(i);
-			
-			auto residue = r[i].norm();
-			if(residue > tol) converged = false;
-			 
-			std::cout << "state " << i << "; residue = " << residue << std::endl;
-		}
-		
-		if(k==100){
-//		if(converged){
-			std::cout << "Davidson converged" << std::endl;
-			
-			for(size_t i = 0; i < neigenpair; ++i){
-				std::cout.precision(5);
-				std::cout << "Davidson L = " << lambda[i] << "; reference L = " << ref_eval[i] << std::endl;
-				getchar();
-				for(size_t j = 0; j < DIM; ++j){
-					std::cout << y(i,j) << "  " << ref_evec(i,j) << std::endl;
-				}
-				getchar();
-			}
-			
-//			std::cout << y.col(i) << std::endl;		
-			break;
-		}
-		
-		// compute new directions
-		for(size_t i = 0; i < neigenpair; ++i){
-			t[i] = r[i]/(lambda[i] - A(i,i));
-		}
-		
-		//std::cout << r << std::endl;
-		k++;
-		
-		V.conservativeResize(DIM, k*neigenpair);
-		for(size_t i = 0; i < neigenpair; ++i){
-			V.col((k-1)*neigenpair + i) = t[i];
-		}
-		Eigen::HouseholderQR<Matrix> qr(V);
-		V = qr.householderQ(); 
-		
-		
-		x.resize(k*neigenpair);
-		r.resize(k*neigenpair);
-		t.resize(k*neigenpair);
-		
-					
-	}while(k < maxiter);
-	
-
-	
-
-}
-
-
-/*
-typedef Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>
-        Matrix; 
-        
-size_t nbasis(const std::vector<libint2::Shell>& shells) {
-  size_t n = 0;
-  for (const auto& shell: shells)
-    n += shell.size();
-  return n;
-}
-
-size_t max_nprim(const std::vector<libint2::Shell>& shells) {
-  size_t n = 0;
-  for (auto shell: shells)
-    n = std::max(shell.nprim(), n);
-  return n;
-}
-
-int max_l(const std::vector<libint2::Shell>& shells) {
-  int l = 0;
-  for (auto shell: shells)
-    for (auto c: shell.contr)
-      l = std::max(c.l, l);
-  return l;
-}
-
-std::vector<size_t> map_shell_to_basis_function(const std::vector<libint2::Shell>& shells) {
-  std::vector<size_t> result;
-  result.reserve(shells.size());
-
-  size_t n = 0;
-  for (auto shell: shells) {
-    result.push_back(n);
-    n += shell.size();
-  }
-
-  return result;
-}
-
-Matrix compute_2body_fock(const std::vector<libint2::Shell>& shells,
-                          const Matrix& D) {
-
-  using libint2::Shell;
-  using libint2::Engine;
-  using libint2::Operator;
-
-  std::chrono::duration<double> time_elapsed = std::chrono::duration<double>::zero();
-
-  const auto n = nbasis(shells);
-  Matrix G = Matrix::Zero(n,n);
-
-  // construct the 2-electron repulsion integrals engine
-  Engine engine(Operator::coulomb, max_nprim(shells), max_l(shells), 0);
-
-  auto shell2bf = map_shell_to_basis_function(shells);
-
-  const auto& buf = engine.results();
-
-  // The problem with the simple Fock builder is that permutational symmetries of the Fock,
-  // density, and two-electron integrals are not taken into account to reduce the cost.
-  // To make the simple Fock builder efficient we must rearrange our computation.
-  // The most expensive step in Fock matrix construction is the evaluation of 2-e integrals;
-  // hence we must minimize the number of computed integrals by taking advantage of their permutational
-  // symmetry. Due to the multiplicative and Hermitian nature of the Coulomb kernel (and realness
-  // of the Gaussians) the permutational symmetry of the 2-e ints is given by the following relations:
-  //
-  // (12|34) = (21|34) = (12|43) = (21|43) = (34|12) = (43|12) = (34|21) = (43|21)
-  //
-  // (here we use chemists' notation for the integrals, i.e in (ab|cd) a and b correspond to
-  // electron 1, and c and d -- to electron 2).
-  //
-  // It is easy to verify that the following set of nested loops produces a permutationally-unique
-  // set of integrals:
-  // foreach a = 0 .. n-1
-  //   foreach b = 0 .. a
-  //     foreach c = 0 .. a
-  //       foreach d = 0 .. (a == c ? b : c)
-  //         compute (ab|cd)
-  //
-  // The only complication is that we must compute integrals over shells. But it's not that complicated ...
-  //
-  // The real trick is figuring out to which matrix elements of the Fock matrix each permutationally-unique
-  // (ab|cd) contributes. STOP READING and try to figure it out yourself. (to check your answer see below)
-
-  // loop over permutationally-unique set of shells
-  for(auto s1=0; s1!=shells.size(); ++s1) {
-
-    auto bf1_first = shell2bf[s1]; // first basis function in this shell
-    auto n1 = shells[s1].size();   // number of basis functions in this shell
-
-    for(auto s2=0; s2<=s1; ++s2) {
-
-      auto bf2_first = shell2bf[s2];
-      auto n2 = shells[s2].size();
-
-      for(auto s3=0; s3<=s1; ++s3) {
-
-        auto bf3_first = shell2bf[s3];
-        auto n3 = shells[s3].size();
-
-        const auto s4_max = (s1 == s3) ? s2 : s3;
-        for(auto s4=0; s4<=s4_max; ++s4) {
-
-          auto bf4_first = shell2bf[s4];
-          auto n4 = shells[s4].size();
-
-          // compute the permutational degeneracy (i.e. # of equivalents) of the given shell set
-          auto s12_deg = (s1 == s2) ? 1.0 : 2.0;
-          auto s34_deg = (s3 == s4) ? 1.0 : 2.0;
-          auto s12_34_deg = (s1 == s3) ? (s2 == s4 ? 1.0 : 2.0) : 2.0;
-          auto s1234_deg = s12_deg * s34_deg * s12_34_deg;
-
-          const auto tstart = std::chrono::high_resolution_clock::now();
-
-          engine.compute(shells[s1], shells[s2], shells[s3], shells[s4]);
-          const auto* buf_1234 = buf[0];
-          if (buf_1234 == nullptr)
-            continue; // if all integrals screened out, skip to next quartet
-
-          const auto tstop = std::chrono::high_resolution_clock::now();
-          time_elapsed += tstop - tstart;
-
-          // ANSWER
-          // 1) each shell set of integrals contributes up to 6 shell sets of the Fock matrix:
-          //    F(a,b) += (ab|cd) * D(c,d)
-          //    F(c,d) += (ab|cd) * D(a,b)
-          //    F(b,d) -= 1/4 * (ab|cd) * D(a,c)
-          //    F(b,c) -= 1/4 * (ab|cd) * D(a,d)
-          //    F(a,c) -= 1/4 * (ab|cd) * D(b,d)
-          //    F(a,d) -= 1/4 * (ab|cd) * D(b,c)
-          // 2) each permutationally-unique integral (shell set) must be scaled by its degeneracy,
-          //    i.e. the number of the integrals/sets equivalent to it
-          // 3) the end result must be symmetrized
-          for(auto f1=0, f1234=0; f1!=n1; ++f1) {
-            const auto bf1 = f1 + bf1_first;
-            for(auto f2=0; f2!=n2; ++f2) {
-              const auto bf2 = f2 + bf2_first;
-              for(auto f3=0; f3!=n3; ++f3) {
-                const auto bf3 = f3 + bf3_first;
-                for(auto f4=0; f4!=n4; ++f4, ++f1234) {
-                  const auto bf4 = f4 + bf4_first;
-
-                  const auto value = buf_1234[f1234];
-
-                  const auto value_scal_by_deg = value * s1234_deg;
-
-                  G(bf1,bf2) += D(bf3,bf4) * value_scal_by_deg;
-                  G(bf3,bf4) += D(bf1,bf2) * value_scal_by_deg;
-                  G(bf1,bf3) -= 0.25 * D(bf2,bf4) * value_scal_by_deg;
-                  G(bf2,bf4) -= 0.25 * D(bf1,bf3) * value_scal_by_deg;
-                  G(bf1,bf4) -= 0.25 * D(bf2,bf3) * value_scal_by_deg;
-                  G(bf2,bf3) -= 0.25 * D(bf1,bf4) * value_scal_by_deg;
-                }
-              }
-            }
-          }
-
-        }
-      }
+	std::string inpfile;
+	for(size_t i = 0; i < static_cast<size_t>(argc); ++i){
+        if(std::string{argv[i]} == "-inp"){inpfile = std::string{argv[i+1]};}
     }
-  }
 
-  // symmetrize the result and return
-  Matrix Gt = G.transpose();
-  return 0.5 * (G + Gt);
-}
-
-
-int main()
-{
-	QM_residue p1("gms_7amc.out");	
+	QM_residue mol(inpfile);
+	
+	Matrix& MOcoef = mol.get_MOs();
 	
 	libint2::initialize();
 	
-	Matrix D = Matrix::Zero(p1.ncgto,p1.ncgto);
+// check orthonormality of MOs 	
+	Matrix S = compute_1body_ints(libint2::Operator::overlap, mol.get_basis());
 	
-	compute_2body_fock(p1.get_basis(), D);
+	for(size_t i = 0; i < mol.nmo; ++i){
+		Eigen::VectorXd MOi = MOcoef.row(i);
+		Eigen::VectorXd SMOi = S*MOi;
+		auto norm = MOi.dot(SMOi);
+		if(fabs(norm - 1.) > pars::orto_cutoff){
+			std::cout.precision(10);
+			std::cout << "warning: normalization of MO" << i << " = " << norm << std::endl;
+		}
+	}	
 	
-	libint2::finalize();
+// direct CIS for small molecules
+// build density matrix
+	auto nocc = mol.nelec()/2;
+	std::cout << nocc << std::endl;
+// GAMESS molecular orbitals are stored in rows
+	auto MOcoef_occ = MOcoef.topRows(nocc);
+    Matrix D = MOcoef_occ.transpose() * MOcoef_occ;
+
+	auto start = std::chrono::high_resolution_clock::now();
+// build Fock matrix and compute orbiat energies
+	Matrix T = compute_1body_ints(libint2::Operator::kinetic, mol.get_basis());
+	Matrix V = compute_1body_ints(libint2::Operator::nuclear, mol.get_basis(), mol.get_atoms());
 	
-}
+	Matrix F = T + V + compute_2body_fock(mol.get_basis(), D);
+
+	auto stop = std::chrono::high_resolution_clock::now();
+	std::cout << "Fock time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
+	
+	Eigen::GeneralizedSelfAdjointEigenSolver<Matrix> eigensolver(F, S);
+	auto orbital_e = eigensolver.eigenvalues();
+	
+	std::cout << "orbital energies:" << std::endl;
+	for(size_t i = 0; i < mol.nmo; ++i){
+		std::cout << orbital_e[i] << std::endl;
+	}
+	
+/*
+ * 
+ * CI-S for singlet states 
+ * 
 */
+	
+// determine chemical core
+	auto ncore_atomic = [](size_t atomic_number)
+	{
+		assert(atomic_number <= 18 && "ncore_atomic(): 4th period and higher ones are not supported");
+		
+		auto ncore = 0ul;
+		
+		if(atomic_number <= 2){
+			ncore = 0;
+		}
+		else if(atomic_number <= 10){
+			ncore = 1;
+		}
+		else if(atomic_number <= 18){
+			ncore = 5; 
+		}
+		
+		return ncore;
+	};
+	
+	size_t ncore = 0;
+	for(size_t i = 0, i_max = mol.get_atoms().size(); i < i_max; ++i){
+		ncore += ncore_atomic(mol.get_atoms()[i].atomic_number);
+	}
+
+// create SAPS
+	auto nao = mol.ncgto;
+	auto nmo = mol.nmo;
+	auto nval = nmo - nocc;
+	auto nact = nocc - ncore;
+	auto nsaps = nval*nact;
+	
+	std::vector<std::pair<size_t, size_t>> saps;
+	
+	for(size_t i = 0; i < nact; ++i){
+		for(size_t j = 0; j < nval; ++j){
+			saps.emplace_back(std::make_pair(ncore + i, nocc + j));
+		}
+	}
+	
+// sort SAPS
+	auto energy_sort = [=](std::pair<size_t, size_t> sap1, std::pair<size_t, size_t> sap2){
+		auto e1 = orbital_e[sap1.second] - orbital_e[sap1.first];
+		auto e2 = orbital_e[sap2.second] - orbital_e[sap2.first];
+		return e1 < e2;
+	};
+	
+	std::sort(saps.begin(), saps.end(), energy_sort);
+
+	std::cout << "SAPS diagonal eneries" << std::endl;
+	for(const auto& sap : saps){
+		std::cout << sap.first << " -> " << sap.second << "; E = " 
+			<< orbital_e[sap.second] - orbital_e[sap.first] << std::endl;
+	}
+
+
+/*
+ *  Davidson procedure	
+ */
+
+	size_t nstate = 6;
+	size_t ntrial = nstate*david_pars::ntrial_per_state; //12;
+	size_t model_dim = ntrial;
+	size_t nvec_used = ntrial;
+	
+// eigenvectors and eigenvalues
+	Matrix cis_evec(nsaps, nstate);
+	Vector cis_eval(nstate);
+	 
+// estimated Hcis(i,i) for preconditioner
+	Vector Hdiag(nsaps);
+	for(size_t k = 0; k < nsaps; ++k)
+		Hdiag(k) = orbital_e[saps[k].second] - orbital_e[saps[k].first];
+	
+	size_t niter = 0;
+	
+// initial guess	
+	Matrix V_trial = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		V_trial(tr, tr) = 1.0;	
+
+// 	evaluation of CIS state density; in form of lambda
+	auto compute_Tcis = [&](const Matrix& V_st){
+		Matrix Tcis = Matrix::Zero(nao, nao);
+		
+		for(size_t i = 0; i < nao; ++i){
+			for(size_t j = 0; j < nao; ++j){
+				for(size_t k = 0; k < nsaps; ++k){
+					Tcis(i,j) += V_st(k)*MOcoef(saps[k].first, i)*MOcoef(saps[k].second, j);
+				}
+			}
+		}
+		
+		return std::move(Tcis);
+	};
+	
+	do{
+	
+	std::vector<Matrix> Tcis(ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		Tcis[tr] = compute_Tcis(V_trial.col(tr));
+
+//	std::cout << "CIS-S trial density for state 0:" << std::endl;
+//	std::cout << Tcis[0] << std::endl;
+	
+	start = std::chrono::high_resolution_clock::now();
+
+// Fock-like matrices; batched evaluation
+	auto Flike_batch = compute_2body_fock_like_batch_s(mol.get_basis(), Tcis);
+
+	stop = std::chrono::high_resolution_clock::now();
+	std::cout << "Fock-like time = " << std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count() << " ms" << std::endl;
+
+//	std::cout << "Fock-like build for trial vector 0:" << std::endl;
+//	std::cout << Flike_batch[0] << std::endl;
+		
+// W_trial = H*V_trial	
+	Matrix W_trial = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		
+		for(size_t k = 0; k < nsaps; ++k){
+			
+			for(size_t i = 0; i < nao; ++i){
+				for(size_t j = 0; j < nao; ++j){
+					W_trial(k, tr) += MOcoef(saps[k].first, i)*MOcoef(saps[k].second, j)*Flike_batch[tr](i, j);
+				}
+			}
+			
+			W_trial(k, tr) += (orbital_e[saps[k].second] - orbital_e[saps[k].first])*V_trial(k, tr);
+			
+		}
+		
+	}
+
+// projection to model Hamiltonian
+	auto model_H = V_trial.transpose()*W_trial;
+	
+//	std::cout << "Model CI-S Hamiltonian; ntrial = " << ntrial << "; nsaps = " << nsaps << std::endl;
+//	std::cout << model_H << std::endl;
+
+// diagonalization
+	Eigen::SelfAdjointEigenSolver<Matrix> eigensolverH(model_H);
+	
+//	std::cout << "Eigenvalues in a.u.:" << std::endl;	
+//	std::cout << eigensolverH.eigenvalues() << std::endl;
+	
+	auto evec = eigensolverH.eigenvectors();
+	auto eval = eigensolverH.eigenvalues();
+
+// Ritz vectors	
+	Matrix x = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr)
+		x.col(tr) = V_trial*evec.col(tr);
+	
+// residual vectors
+	std::cout << "Residues:"  << std::endl;
+	Matrix res = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		res.col(tr) = eval[tr]*x.col(tr) - W_trial*evec.col(tr);
+//		std::cout << res.col(tr).norm() << std::endl;
+	}
+	
+// convergence check
+	std::cout << "Iteration " << niter << " :" << std::endl;
+	std::cout << std::setw(16) << "Energy" << std::setw(16) << "Residue" << std::endl;
+	bool converged = true;
+	for(size_t i = 0; i < nstate; ++i){
+		auto residue = res.col(i).norm();
+		std::cout << "state " << i + 1 << std::setw(16) << eval[i] << std::setw(16) << residue << std::endl;
+		if(residue > david_pars::tolerance) converged = false;
+	}
+	if(converged){
+		for(size_t i = 0; i < nstate; ++i){
+			cis_eval[i] = eval[i];
+			cis_evec.col(i) = x.col(i);
+		}
+		std::cout << "Davidson converged" << std::endl;
+		break;
+	}
+	
+// correction vectors
+	Matrix corr = Matrix::Zero(nsaps, ntrial);
+	for(size_t tr = 0; tr < ntrial; ++tr){
+		for(size_t k = 0; k < nsaps; ++k){
+			corr(k, tr) = res(k, tr)/(eval[tr] - Hdiag[k]);
+		}
+	}
+//	std::cout << corr << std::endl;
+	
+	nvec_used += ntrial;
+	assert(nvec_used < nsaps && "number of used trial vectors exceeded number of SAPS");
+		
+	auto ntrial_add = nstate*david_pars::ntrial_per_state;
+	if(ntrial < nstate*david_pars::trial_space_mult - ntrial_add){
+		auto ntrial_old = ntrial;
+		ntrial += ntrial_add;
+		V_trial.conservativeResize(nsaps, ntrial);
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(ntrial_old + i) = corr.col(i);
+	}
+	else{
+		V_trial.resize(nsaps, 2*ntrial_add);
+		ntrial = 2*ntrial_add;
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(i) = x.col(i);
+		for(size_t i = 0; i < ntrial_add; ++i)
+			V_trial.col(i + ntrial_add) = corr.col(i);
+	}
+		
+	auto QR = V_trial.fullPivHouseholderQr();
+	V_trial = QR.matrixQ().adjoint().topRows(V_trial.cols()).transpose(); 
+
+	++niter;
+	}while(niter < david_pars::max_davison_iter);
+	
+	
+	for(size_t i = 0; i < nstate; ++i){
+		std::cout << "State " << i + 1 << std::endl;
+		std::cout << "Energy = " << cis_eval[i] << std::endl;
+		for(size_t k = 0; k < nsaps; ++k){
+			if(fabs(cis_evec(k, i)) > 0.05){
+				std::cout << saps[k].first << " -> " << saps[k].second << ' ' << cis_evec(k, i) << std::endl;
+			}
+		}
+	}
+/*
+	std::cout << "Eigenvectors of model space" << std::endl;
+	for(size_t i = 0; i < ntrial; ++i){
+		std::cout << saps[i].first << " -> " << saps[i].second << ' ';
+		for(size_t j = 0; j < ntrial; ++j){
+			std::cout << std::setw(16) << evec(i, j);
+		}
+		std::cout << std::endl;
+	}
+*/	
+	
+	
+	
+	libint2::finalize();	
+
+}
+
+
